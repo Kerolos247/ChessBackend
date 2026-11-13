@@ -1,3 +1,8 @@
 <Solution>
+  <Project Path="ChessBackend.Shared.Contracts/ChessBackend.Shared.Contracts.csproj" />
+  <Project Path="ChessBackend.Modules.Auth/ChessBackend.Modules.Auth.csproj" />
+  <Project Path="ChessBackend.Modules.Matches/ChessBackend.Modules.Matches.csproj" />
+  <Project Path="ChessBackend.Modules.Puzzles/ChessBackend.Modules.Puzzles.csproj" />
+  <Project Path="ChessBackend.Modules.Multiplayer/ChessBackend.Modules.Multiplayer.csproj" />
   <Project Path="ChessBackend/ChessBackend.csproj" />
 </Solution>

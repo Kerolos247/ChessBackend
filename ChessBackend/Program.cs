@@ -1,20 +1,56 @@
-using ChessBackend.Hubs;
-using ChessBackend.Services;
+using System.Text;
+using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi;
+using ChessBackend.Modules.Auth;
+using ChessBackend.Modules.Auth.Controllers;
+using ChessBackend.Modules.Matches;
+using ChessBackend.Modules.Matches.Controllers;
+using ChessBackend.Modules.Multiplayer;
+using ChessBackend.Modules.Puzzles;
+using ChessBackend.Modules.Puzzles.Controllers;
+using ChessBackend.Modules.Puzzles.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 1. تحديد الـ URL والبورت (5000) ليتطابق تماماً مع الـ WPF Client
 builder.WebHost.UseUrls("http://localhost:5000");
 
-// 2. Add services to the container (Controllers & OpenAPI)
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddApplicationPart(typeof(AuthController).Assembly)
+    .AddApplicationPart(typeof(MatchesController).Assembly)
+    .AddApplicationPart(typeof(PuzzleController).Assembly)
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+    });
+
 builder.Services.AddOpenApi();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "ChessBackend API",
+        Version = "v1"
+    });
 
-// 3. Add SignalR & RoomManager Services
-builder.Services.AddSignalR();
-builder.Services.AddSingleton<RoomManager>(); // للحفاظ على حالة الغرف في الـ Memory
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = SecuritySchemeType.Http,
+        Scheme = "Bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Description = "Enter your JWT token below."
+    });
 
-// 4. Add CORS (عشان يسمح للـ WPF Client بالاتصال بدون أي Blocking)
+    options.AddSecurityRequirement(document => new OpenApiSecurityRequirement
+    {
+        [new OpenApiSecuritySchemeReference("Bearer", document)] = []
+    });
+});
+
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
@@ -26,24 +62,74 @@ builder.Services.AddCors(options =>
     });
 });
 
+builder.Services.AddAuthModule(builder.Configuration);
+builder.Services.AddMatchesModule(builder.Configuration);
+builder.Services.AddPuzzlesModule(builder.Configuration);
+builder.Services.AddMultiplayerModule();
+
+var jwtSettings = builder.Configuration.GetSection("JwtSettings");
+var secretKey = Encoding.UTF8.GetBytes(jwtSettings["SecretKey"]!);
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.SaveToken = true;
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = jwtSettings["Issuer"],
+        ValidAudience = jwtSettings["Audience"],
+        IssuerSigningKey = new SymmetricSecurityKey(secretKey),
+        ClockSkew = TimeSpan.Zero
+    };
+
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            var accessToken = context.Request.Query["access_token"];
+            var path = context.HttpContext.Request.Path;
+            if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/gameHub"))
+            {
+                context.Token = accessToken;
+            }
+            return Task.CompletedTask;
+        }
+    };
+});
+
+builder.Services.AddAuthorization();
+
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
+using (var scope = app.Services.CreateScope())
+{
+    var puzzleSeeder = scope.ServiceProvider.GetRequiredService<PuzzleSeeder>();
+    await puzzleSeeder.SeedAsync();
+}
+
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
-// ملاحظة: تم إيقاف app.UseHttpsRedirection() لأن الـ WPF Client يتصل عبر HTTP عادي (http://localhost:5000)
-// app.UseHttpsRedirection();
+app.UseSwagger();
+app.UseSwaggerUI();
 
-// تفعيل السياسات الخاصة بـ CORS
 app.UseCors();
 
+app.UseAuthentication();
 app.UseAuthorization();
 
-// 5. Map Endpoints (Controllers & SignalR Hub)
 app.MapControllers();
-app.MapHub<ChessHub>("/gameHub"); // الرابط اللي هيتصل بيه الـ WPF Client
+app.MapMultiplayerModule();
 
 app.Run();
